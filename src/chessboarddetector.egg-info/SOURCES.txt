@@ -1,0 +1,12 @@
+README.md
+pyproject.toml
+src/chessboarddetector/__init__.py
+src/chessboarddetector/cli.py
+src/chessboarddetector/detector.py
+src/chessboarddetector/render.py
+src/chessboarddetector.egg-info/PKG-INFO
+src/chessboarddetector.egg-info/SOURCES.txt
+src/chessboarddetector.egg-info/dependency_links.txt
+src/chessboarddetector.egg-info/entry_points.txt
+src/chessboarddetector.egg-info/requires.txt
+src/chessboarddetector.egg-info/top_level.txt

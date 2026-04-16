@@ -1,0 +1,2 @@
+[console_scripts]
+chessboarddetector = chessboarddetector.cli:main
