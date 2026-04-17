@@ -6,13 +6,14 @@ This repository contains a pure computer-vision chessboard detector written in P
 
 The detector uses a multi-stage pipeline:
 
-1. Try OpenCV's `findChessboardCornersSB` on the `7x7` inner-corner pattern. When that works, we fit a homography and extrapolate the full board outline and grid.
-2. If the helper fails, generate board quadrilateral candidates from contours and oriented rectangles.
-3. Warp each candidate to a square view and score it using:
+1. Try OpenCV's `findChessboardCornersSB` on the `7x7` inner-corner pattern across several grayscale variants, including inverted and contrast-normalized views.
+2. If the full-image helper fails, generate board quadrilateral candidates from contours and oriented rectangles.
+3. Warp each candidate to a square view and retry `findChessboardCornersSB` on the rectified board crop before falling back to geometric scoring.
+4. Score remaining candidates using:
    - contrast between neighboring cells in the expected checker pattern,
    - edge energy along expected internal grid lines,
    - consistency of color variation across rows and columns.
-4. Pick the best candidate and project the `9x9` lattice back onto the original image.
+5. Pick the best result and project the `9x9` lattice back onto the original image.
 
 This keeps the implementation in classical CV only: no training, no neural nets.
 
