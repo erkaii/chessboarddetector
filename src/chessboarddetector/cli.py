@@ -22,10 +22,6 @@ def build_parser() -> argparse.ArgumentParser:
         default="board_overlay.jpg",
     )
     parser.add_argument(
-        "--debug",
-        help="Optional path for the rectified winning candidate image",
-    )
-    parser.add_argument(
         "--min-score",
         type=float,
         default=0.15,
@@ -55,12 +51,6 @@ def main() -> int:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(str(output_path), overlay)
     print(f"Wrote overlay to {output_path}")
-
-    if args.debug and detection.debug_warp is not None:
-        debug_path = Path(args.debug)
-        debug_path.parent.mkdir(parents=True, exist_ok=True)
-        cv2.imwrite(str(debug_path), detection.debug_warp)
-        print(f"Wrote debug warp to {debug_path}")
 
     return 0
 

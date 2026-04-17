@@ -16,7 +16,6 @@ class BoardDetection:
     grid_points: np.ndarray
     score: float
     method: str
-    debug_warp: np.ndarray | None = None
 
 
 class ChessboardDetector:
@@ -37,16 +36,25 @@ class ChessboardDetector:
         if not candidates:
             raise DetectionError("No board candidates were found.")
 
-        best_detection: BoardDetection | None = None
+        scored_candidates: list[BoardDetection] = []
         for candidate in candidates:
             scored = self._score_candidate(image, gray, candidate)
             if scored is None:
                 continue
-            if best_detection is None or scored.score > best_detection.score:
-                best_detection = scored
+            scored_candidates.append(scored)
 
-        if best_detection is None:
+        if not scored_candidates:
             raise DetectionError("No valid board candidate survived scoring.")
+
+        scored_candidates.sort(key=lambda detection: detection.score, reverse=True)
+        best_detection = scored_candidates[0]
+
+        helper_retry_count = min(5, len(scored_candidates))
+        for detection in scored_candidates[:helper_retry_count]:
+            refined = self._detect_helper_on_candidate(image, detection.corners)
+            if refined is not None:
+                return refined
+
         if best_detection.score < min_score:
             raise DetectionError(
                 f"Best candidate score {best_detection.score:.3f} is below threshold {min_score:.3f}."
@@ -59,42 +67,130 @@ class ChessboardDetector:
         clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
         return clahe.apply(gray)
 
+    def _helper_variants(self, gray: np.ndarray) -> list[np.ndarray]:
+        clahe_strong = cv2.createCLAHE(clipLimit=3.5, tileGridSize=(8, 8)).apply(gray)
+        normalized = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+        blurred = cv2.GaussianBlur(gray, (7, 7), 0)
+        sharpened = cv2.addWeighted(gray, 1.6, blurred, -0.6, 0)
+        adaptive = cv2.adaptiveThreshold(
+            gray,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            31,
+            7,
+        )
+
+        variants = [
+            gray,
+            255 - gray,
+            clahe_strong,
+            255 - clahe_strong,
+            normalized,
+            255 - normalized,
+            sharpened,
+            255 - sharpened,
+            adaptive,
+            255 - adaptive,
+        ]
+
+        deduped: list[np.ndarray] = []
+        seen: set[bytes] = set()
+        for variant in variants:
+            clipped = np.clip(variant, 0, 255).astype(np.uint8)
+            key = clipped.tobytes()
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(clipped)
+        return deduped
+
     def _detect_with_opencv_helper(
         self, gray: np.ndarray, image_shape: tuple[int, ...]
+    ) -> BoardDetection | None:
+        return self._run_helper(gray, image_shape, method_prefix="findChessboardCornersSB")
+
+    def _detect_helper_on_candidate(
+        self, image: np.ndarray, candidate: np.ndarray
+    ) -> BoardDetection | None:
+        dst = np.array(
+            [
+                [0, 0],
+                [self.warp_size - 1, 0],
+                [self.warp_size - 1, self.warp_size - 1],
+                [0, self.warp_size - 1],
+            ],
+            dtype=np.float32,
+        )
+        candidate = candidate.astype(np.float32)
+        image_to_warp = cv2.getPerspectiveTransform(candidate, dst)
+        board_view = cv2.warpPerspective(image, image_to_warp, (self.warp_size, self.warp_size))
+        gray = self._preprocess(board_view)
+
+        helper_detection = self._run_helper(
+            gray,
+            board_view.shape,
+            method_prefix="findChessboardCornersSB_rectified",
+        )
+        if helper_detection is None:
+            return None
+
+        board_to_image = cv2.getPerspectiveTransform(dst, candidate)
+        warped_grid = helper_detection.grid_points.reshape(-1, 1, 2).astype(np.float32)
+        image_grid = cv2.perspectiveTransform(warped_grid, board_to_image).reshape(9, 9, 2)
+        warped_corners = helper_detection.corners.reshape(-1, 1, 2).astype(np.float32)
+        image_corners = cv2.perspectiveTransform(warped_corners, board_to_image).reshape(4, 2)
+
+        return BoardDetection(
+            corners=self._order_corners(image_corners),
+            grid_points=image_grid,
+            score=1.0,
+            method=helper_detection.method,
+        )
+
+    def _run_helper(
+        self, gray: np.ndarray, image_shape: tuple[int, ...], method_prefix: str
     ) -> BoardDetection | None:
         flags = (
             cv2.CALIB_CB_EXHAUSTIVE
             | cv2.CALIB_CB_ACCURACY
             | cv2.CALIB_CB_NORMALIZE_IMAGE
         )
-        found, corners = cv2.findChessboardCornersSB(gray, (7, 7), flags=flags)
-        if not found or corners is None or len(corners) != 49:
-            return None
-
-        inner = corners.reshape(-1, 2).astype(np.float32)
         template_inner = np.array(
             [[x, y] for y in range(1, 8) for x in range(1, 8)], dtype=np.float32
         )
-        homography, _ = cv2.findHomography(template_inner, inner, cv2.RANSAC, 3.0)
-        if homography is None:
-            return None
-
         outer_template = np.array(
             [[0, 0], [8, 0], [8, 8], [0, 8]], dtype=np.float32
         ).reshape(-1, 1, 2)
-        projected_outer = cv2.perspectiveTransform(outer_template, homography).reshape(
-            -1, 2
-        )
-        if not self._corners_inside_image(projected_outer, image_shape):
-            return None
 
-        grid_points = self._project_full_grid(homography)
-        return BoardDetection(
-            corners=self._order_corners(projected_outer),
-            grid_points=grid_points,
-            score=1.0,
-            method="findChessboardCornersSB",
-        )
+        for index, variant in enumerate(self._helper_variants(gray)):
+            found, corners = cv2.findChessboardCornersSB(variant, (7, 7), flags=flags)
+            if not found or corners is None or len(corners) != 49:
+                continue
+
+            inner = corners.reshape(-1, 2).astype(np.float32)
+            homography, _ = cv2.findHomography(template_inner, inner, cv2.RANSAC, 3.0)
+            if homography is None:
+                continue
+
+            projected_outer = cv2.perspectiveTransform(
+                outer_template, homography
+            ).reshape(-1, 2)
+            if not self._corners_inside_image(projected_outer, image_shape):
+                continue
+
+            grid_points = self._project_full_grid(homography)
+            method = method_prefix
+            if index > 0:
+                method = f"{method_prefix}_variant{index}"
+            return BoardDetection(
+                corners=self._order_corners(projected_outer),
+                grid_points=grid_points,
+                score=1.0,
+                method=method,
+            )
+
+        return None
 
     def _generate_candidates(self, gray: np.ndarray) -> list[np.ndarray]:
         edges = cv2.Canny(gray, 50, 150)
@@ -179,7 +275,6 @@ class ChessboardDetector:
             grid_points=grid_points,
             score=float(score),
             method="candidate_scoring",
-            debug_warp=warp_bgr,
         )
 
     def _cell_means(self, warp_gray: np.ndarray) -> np.ndarray:

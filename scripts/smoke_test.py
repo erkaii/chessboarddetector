@@ -50,8 +50,6 @@ def main() -> int:
     output_dir.mkdir(exist_ok=True)
     cv2.imwrite(str(output_dir / "synthetic_input.jpg"), image)
     cv2.imwrite(str(output_dir / "synthetic_overlay.jpg"), overlay)
-    if detection.debug_warp is not None:
-        cv2.imwrite(str(output_dir / "synthetic_warp.jpg"), detection.debug_warp)
 
     print(detection.method, f"{detection.score:.3f}")
     return 0

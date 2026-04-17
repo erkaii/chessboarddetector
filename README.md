@@ -35,13 +35,11 @@ Optional arguments:
 ```bash
 chessboarddetector input.jpg \
   --output output.jpg \
-  --debug debug_warp.jpg \
   --min-score 0.15
 ```
 
 ## Output
 
 - `--output`: original image with the detected board border and the 8x8 squares drawn.
-- `--debug`: optional top-down rectified board view for the winning candidate.
 
 If detection fails, the CLI exits with a non-zero status and prints the best score it found.
